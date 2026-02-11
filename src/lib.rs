@@ -227,11 +227,12 @@ impl BladeRF {
     }
 
     pub fn fw_version(&self) -> Result<bladerf_version, isize> {
+        let null: *const i8 = std::ptr::null();
         let mut version = bladerf_version {
             major: 0,
             minor: 0,
             patch: 0,
-            describe: std::ptr::null::<i8>(),
+            describe: null,
         };
 
         let res = unsafe { bladerf_fw_version(self.device, &mut version) };
@@ -250,11 +251,12 @@ impl BladeRF {
     }
 
     pub fn fpga_version(&self) -> Result<bladerf_version, isize> {
+        let null: *const i8 = std::ptr::null();
         let mut version = bladerf_version {
             major: 0,
             minor: 0,
             patch: 0,
-            describe: std::ptr::null::<i8>(),
+            describe: null,
         };
 
         let res = unsafe { bladerf_fpga_version(self.device, &mut version) };
