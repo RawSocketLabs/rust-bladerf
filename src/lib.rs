@@ -227,7 +227,12 @@ impl BladeRF {
     }
 
     pub fn fw_version(&self) -> Result<bladerf_version, isize> {
-        let null: *const i8 = std::ptr::null();
+        #[cfg(all(target_os="linux", target_arch="aarch64"))]
+        let null = std::ptr::null::<u8>();
+
+        #[cfg(not(all(target_os="linux", target_arch="aarch64")))]
+        let null = std::ptr::null::<i8>();
+        
         let mut version = bladerf_version {
             major: 0,
             minor: 0,
@@ -251,7 +256,12 @@ impl BladeRF {
     }
 
     pub fn fpga_version(&self) -> Result<bladerf_version, isize> {
-        let null: *const i8 = std::ptr::null();
+        #[cfg(all(target_os="linux", target_arch="aarch64"))]
+        let null = std::ptr::null::<u8>();
+
+        #[cfg(not(all(target_os="linux", target_arch="aarch64")))]
+        let null = std::ptr::null::<i8>();
+
         let mut version = bladerf_version {
             major: 0,
             minor: 0,
