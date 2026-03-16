@@ -80,6 +80,41 @@ pub enum BladeRFLoopback {
     BbTxvga1Rxvga2 = bladerf_loopback_BLADERF_LB_BB_TXVGA1_RXVGA2,
 }
 
+/// Gain mode configuration (AGC)
+///
+/// wraps bladerf_gain_mode
+#[derive(Copy, Clone, PartialEq, Debug)]
+#[repr(u32)]
+pub enum BladeRFGainMode {
+    /// Device default (automatic selection)
+    Default = bladerf_gain_mode_BLADERF_GAIN_DEFAULT,
+    /// Manual Gain Control
+    Mgc = bladerf_gain_mode_BLADERF_GAIN_MGC,
+    /// Fast Attack AGC
+    FastAttackAgc = bladerf_gain_mode_BLADERF_GAIN_FASTATTACK_AGC,
+    /// Slow Attack AGC
+    SlowAttackAgc = bladerf_gain_mode_BLADERF_GAIN_SLOWATTACK_AGC,
+    /// Hybrid AGC
+    HybridAgc = bladerf_gain_mode_BLADERF_GAIN_HYBRID_AGC,
+}
+
+impl TryFrom<bladerf_gain_mode> for BladeRFGainMode {
+    type Error = bladerf_gain_mode;
+
+    fn try_from(value: bladerf_gain_mode) -> Result<Self, bladerf_gain_mode> {
+        let v = match value {
+            bladerf_gain_mode_BLADERF_GAIN_DEFAULT => Self::Default,
+            bladerf_gain_mode_BLADERF_GAIN_MGC => Self::Mgc,
+            bladerf_gain_mode_BLADERF_GAIN_FASTATTACK_AGC => Self::FastAttackAgc,
+            bladerf_gain_mode_BLADERF_GAIN_SLOWATTACK_AGC => Self::SlowAttackAgc,
+            bladerf_gain_mode_BLADERF_GAIN_HYBRID_AGC => Self::HybridAgc,
+            _ => return Err(value),
+        };
+
+        Ok(v)
+    }
+}
+
 impl TryFrom<bladerf_loopback> for BladeRFLoopback {
     type Error = bladerf_loopback;
 
@@ -360,6 +395,40 @@ impl BladeRF {
         let res = unsafe { bladerf_set_gain(self.device, module, gain) };
 
         handle_res!(res);
+    }
+
+    /// Set the gain control mode on the specified channel
+    ///
+    /// Use [`BladeRFGainMode::SlowAttackAgc`] or [`BladeRFGainMode::FastAttackAgc`]
+    /// to enable AGC, or [`BladeRFGainMode::Mgc`] for manual control.
+    pub fn set_gain_mode(
+        &self,
+        channel: BladeRFChannel,
+        mode: BladeRFGainMode,
+    ) -> Result<isize, isize> {
+        let res = unsafe {
+            bladerf_set_gain_mode(self.device, channel as bladerf_channel, mode as bladerf_gain_mode)
+        };
+
+        handle_res!(res);
+    }
+
+    /// Fetch the current gain control mode for the specified channel
+    pub fn get_gain_mode(&self, channel: BladeRFChannel) -> Result<BladeRFGainMode, isize> {
+        let mut mode: bladerf_gain_mode = bladerf_gain_mode_BLADERF_GAIN_DEFAULT;
+
+        let res = unsafe {
+            bladerf_get_gain_mode(self.device, channel as bladerf_channel, &mut mode)
+        };
+
+        if res < 0 {
+            return Err(res as isize);
+        }
+
+        match BladeRFGainMode::try_from(mode) {
+            Ok(v) => Ok(v),
+            Err(_) => Err(-1),
+        }
     }
 
     // Sampling Control
@@ -904,5 +973,24 @@ mod tests {
         let actual_sampling = device.get_sampling().unwrap();
 
         assert!(actual_sampling == sampling);
+    }
+
+    #[test]
+    fn test_gain_mode() {
+        let device = BladeRF::open(None).unwrap();
+
+        // Enable slow-attack AGC on RX1
+        device
+            .set_gain_mode(BladeRFChannel::Rx1, BladeRFGainMode::SlowAttackAgc)
+            .unwrap();
+        let mode = device.get_gain_mode(BladeRFChannel::Rx1).unwrap();
+        assert_eq!(mode, BladeRFGainMode::SlowAttackAgc);
+
+        // Switch back to manual gain control
+        device
+            .set_gain_mode(BladeRFChannel::Rx1, BladeRFGainMode::Mgc)
+            .unwrap();
+        let mode = device.get_gain_mode(BladeRFChannel::Rx1).unwrap();
+        assert_eq!(mode, BladeRFGainMode::Mgc);
     }
 }
