@@ -1,31 +1,49 @@
-use std::{error::Error, ffi::CStr, fmt::Display};
-
-use bladerf_sys as sys;
+use thiserror::Error;
 
 /// Error Codes as defined in <https://nuand.com/libbladeRF-doc/v2.5.0/group___r_e_t_c_o_d_e_s.html>
 #[repr(i32)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum BladeRfError {
+    #[error("unexpected failure")]
     Unexpected = -1,
+    #[error("value is outside the supported range")]
     Range = -2,
+    #[error("invalid parameter")]
     Inval = -3,
+    #[error("memory allocation failed")]
     Mem = -4,
+    #[error("I/O failure")]
     Io = -5,
+    #[error("operation timed out")]
     Timeout = -6,
+    #[error("device is not present")]
     Nodev = -7,
+    #[error("operation is unsupported")]
     Unsupported = -8,
+    #[error("buffer is misaligned")]
     Misaligned = -9,
+    #[error("checksum validation failed")]
     Checksum = -10,
+    #[error("file was not found")]
     NoFile = -11,
+    #[error("FPGA update is required")]
     UpdateFpga = -12,
+    #[error("firmware update is required")]
     UpdateFw = -13,
+    #[error("requested timestamp is in the past")]
     TimePast = -14,
+    #[error("queue is full")]
     QueueFull = -15,
+    #[error("FPGA operation failed")]
     FpgaOp = -16,
+    #[error("permission denied")]
     Permission = -17,
+    #[error("operation would block")]
     WouldBlock = -18,
+    #[error("device is not initialized")]
     NotInit = -19,
     /// Arbitrarily chosen discriminant
+    #[error("unknown libbladeRF error code {0}")]
     Unknown(i32) = i32::MIN,
 }
 
@@ -83,19 +101,20 @@ impl From<BladeRfError> for i32 {
     }
 }
 
-impl Display for BladeRfError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let disciminant = i32::from(*self);
-        // Safety: the function https://github.com/Nuand/bladeRF/blob/fe3304d75967c88ab4f17ff37cb5daf8ff53d3e1/host/libraries/libbladeRF/src/bladerf.c#L1784
-        // Returns a valid Cstring for any i32 input.
-        let msg_ptr = unsafe { sys::bladerf_strerror(disciminant) };
-        let msg = unsafe {
-            CStr::from_ptr(msg_ptr)
-                .to_str()
-                .expect("These strings all seems to be valid ascii and thus UTF8")
-        };
-        write!(f, "BladeRF Error: {}", msg)
-    }
+/// Failure while applying a [`crate::BladeRFModuleConfig`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum BladeRFModuleConfigError {
+    /// The device rejected the requested center frequency.
+    #[error("failed to set bladeRF frequency: {0}")]
+    Frequency(#[source] BladeRfError),
+    /// The device rejected the requested sample rate.
+    #[error("failed to set bladeRF sample rate: {0}")]
+    SampleRate(#[source] BladeRfError),
+    /// The device rejected the requested bandwidth.
+    #[error("failed to set bladeRF bandwidth: {0}")]
+    Bandwidth(#[source] BladeRfError),
+    /// The device rejected the requested gain.
+    #[error("failed to set bladeRF gain: {0}")]
+    Gain(#[source] BladeRfError),
 }
-
-impl Error for BladeRfError {}

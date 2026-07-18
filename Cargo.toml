@@ -15,6 +15,7 @@ members = [".", "sys"]
 libc = "0.1.10"
 num-complex = "0.4.6"
 bladerf-sys = "0.1.0"
+thiserror = "2"
 
 [lib]
 name = "bladerf"

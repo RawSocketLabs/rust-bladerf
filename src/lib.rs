@@ -13,6 +13,8 @@ use bladerf_sys::*;
 
 pub mod error;
 
+pub use error::{BladeRFModuleConfigError, BladeRfError};
+
 // Macro to simplify integer returns
 macro_rules! handle_res {
     ($e:expr) => (
@@ -31,8 +33,8 @@ macro_rules! handle_res {
 	);
 }
 
-// BladeRF module config object
-#[derive(Clone, Debug)]
+/// Requested settings for one bladeRF channel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BladeRFModuleConfig {
     pub frequency: u64,
     pub sample_rate: u32,
@@ -40,6 +42,15 @@ pub struct BladeRFModuleConfig {
     pub lna_gain: i32,
     pub vga1: i32,
     pub vga2: i32,
+}
+
+/// Device-selected values returned after applying a module configuration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BladeRFAppliedModuleConfig {
+    /// Sample rate accepted by libbladeRF, in samples per second.
+    pub sample_rate: u32,
+    /// Bandwidth accepted by libbladeRF, in hertz.
+    pub bandwidth: u32,
 }
 
 // BladeRF overall config object
@@ -262,12 +273,12 @@ impl BladeRF {
     }
 
     pub fn fw_version(&self) -> Result<bladerf_version, isize> {
-        #[cfg(all(target_os="linux", target_arch="aarch64"))]
+        #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
         let null = std::ptr::null::<u8>();
 
-        #[cfg(not(all(target_os="linux", target_arch="aarch64")))]
+        #[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
         let null = std::ptr::null::<i8>();
-        
+
         let mut version = bladerf_version {
             major: 0,
             minor: 0,
@@ -291,10 +302,10 @@ impl BladeRF {
     }
 
     pub fn fpga_version(&self) -> Result<bladerf_version, isize> {
-        #[cfg(all(target_os="linux", target_arch="aarch64"))]
+        #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
         let null = std::ptr::null::<u8>();
 
-        #[cfg(not(all(target_os="linux", target_arch="aarch64")))]
+        #[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
         let null = std::ptr::null::<i8>();
 
         let mut version = bladerf_version {
@@ -407,7 +418,11 @@ impl BladeRF {
         mode: BladeRFGainMode,
     ) -> Result<isize, isize> {
         let res = unsafe {
-            bladerf_set_gain_mode(self.device, channel as bladerf_channel, mode as bladerf_gain_mode)
+            bladerf_set_gain_mode(
+                self.device,
+                channel as bladerf_channel,
+                mode as bladerf_gain_mode,
+            )
         };
 
         handle_res!(res);
@@ -417,9 +432,8 @@ impl BladeRF {
     pub fn get_gain_mode(&self, channel: BladeRFChannel) -> Result<BladeRFGainMode, isize> {
         let mut mode: bladerf_gain_mode = bladerf_gain_mode_BLADERF_GAIN_DEFAULT;
 
-        let res = unsafe {
-            bladerf_get_gain_mode(self.device, channel as bladerf_channel, &mut mode)
-        };
+        let res =
+            unsafe { bladerf_get_gain_mode(self.device, channel as bladerf_channel, &mut mode) };
 
         if res < 0 {
             return Err(res as isize);
@@ -823,39 +837,239 @@ impl BladeRF {
         handle_res!(res)
     }
 
-    // Higher level control
-    pub fn configure_module(&self, module: BladeRFChannel, config: BladeRFModuleConfig) {
-        BladeRF::set_frequency(self, module, config.frequency).unwrap();
-        BladeRF::set_sample_rate(self, module as i32, config.sample_rate).unwrap();
-        BladeRF::set_bandwidth(self, module as i32, config.bandwidth).unwrap();
-        BladeRF::set_gain(self, module as i32, config.lna_gain).unwrap();
-
-        // unsure whether this is still required / doesn't sem correct
-        #[cfg(feature = "unimplemented")]
-        match module {
-            BladeRFChannel::RX0 => {
-                BladeRF::set_rxvga1(self, config.vga1).unwrap();
-                BladeRF::set_rxvga2(self, config.vga2).unwrap();
-            }
-            BladeRFChannel::TX0 => {
-                BladeRF::set_txvga1(self, config.vga1).unwrap();
-                BladeRF::set_txvga2(self, config.vga2).unwrap();
-            }
-            BladeRFChannel::RX1 => {
-                BladeRF::set_rxvga1(self, config.vga1).unwrap();
-                BladeRF::set_rxvga2(self, config.vga2).unwrap();
-            }
-            BladeRFChannel::Tx1 => {
-                BladeRF::set_txvga1(self, config.vga1).unwrap();
-                BladeRF::set_txvga2(self, config.vga2).unwrap();
-            }
-        };
+    /// Apply frequency, sample rate, bandwidth, and aggregate gain in order.
+    ///
+    /// Configuration stops at the first rejected setting. The returned values
+    /// are the sample rate and bandwidth actually selected by libbladeRF,
+    /// which may differ from the requested values.
+    pub fn configure_module(
+        &self,
+        module: BladeRFChannel,
+        config: BladeRFModuleConfig,
+    ) -> Result<BladeRFAppliedModuleConfig, BladeRFModuleConfigError> {
+        configure_module(self, module, config)
     }
+}
+
+trait ModuleConfigurator {
+    fn configure_frequency(&self, channel: BladeRFChannel, frequency: u64) -> Result<(), isize>;
+    fn configure_sample_rate(&self, module: bladerf_module, rate: u32) -> Result<u32, isize>;
+    fn configure_bandwidth(&self, module: bladerf_module, bandwidth: u32) -> Result<u32, isize>;
+    fn configure_gain(&self, module: bladerf_module, gain: i32) -> Result<(), isize>;
+}
+
+impl ModuleConfigurator for BladeRF {
+    fn configure_frequency(&self, channel: BladeRFChannel, frequency: u64) -> Result<(), isize> {
+        self.set_frequency(channel, frequency).map(|_| ())
+    }
+
+    fn configure_sample_rate(&self, module: bladerf_module, rate: u32) -> Result<u32, isize> {
+        self.set_sample_rate(module, rate)
+    }
+
+    fn configure_bandwidth(&self, module: bladerf_module, bandwidth: u32) -> Result<u32, isize> {
+        self.set_bandwidth(module, bandwidth)
+    }
+
+    fn configure_gain(&self, module: bladerf_module, gain: i32) -> Result<(), isize> {
+        self.set_gain(module, gain).map(|_| ())
+    }
+}
+
+fn configure_module<C: ModuleConfigurator>(
+    device: &C,
+    channel: BladeRFChannel,
+    config: BladeRFModuleConfig,
+) -> Result<BladeRFAppliedModuleConfig, BladeRFModuleConfigError> {
+    let module = channel as bladerf_module;
+    device
+        .configure_frequency(channel, config.frequency)
+        .map_err(|code| BladeRFModuleConfigError::Frequency(driver_error(code)))?;
+    let sample_rate = device
+        .configure_sample_rate(module, config.sample_rate)
+        .map_err(|code| BladeRFModuleConfigError::SampleRate(driver_error(code)))?;
+    let bandwidth = device
+        .configure_bandwidth(module, config.bandwidth)
+        .map_err(|code| BladeRFModuleConfigError::Bandwidth(driver_error(code)))?;
+    device
+        .configure_gain(module, config.lna_gain)
+        .map_err(|code| BladeRFModuleConfigError::Gain(driver_error(code)))?;
+
+    Ok(BladeRFAppliedModuleConfig {
+        sample_rate,
+        bandwidth,
+    })
+}
+
+fn driver_error(code: isize) -> BladeRfError {
+    // Every low-level wrapper error originates from libbladeRF's C `int` return
+    // value, so the value is representable as an i32 on supported targets.
+    BladeRfError::from_code(code as i32)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+
+    const REQUESTED_SAMPLE_RATE: u32 = 10_000_000;
+    const ACTUAL_SAMPLE_RATE: u32 = 9_999_998;
+    const REQUESTED_BANDWIDTH: u32 = 8_000_000;
+    const ACTUAL_BANDWIDTH: u32 = 7_999_999;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum ConfigurationStep {
+        Frequency,
+        SampleRate,
+        Bandwidth,
+        Gain,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum ConfigurationCall {
+        Frequency(BladeRFChannel, u64),
+        SampleRate(bladerf_module, u32),
+        Bandwidth(bladerf_module, u32),
+        Gain(bladerf_module, i32),
+    }
+
+    struct FakeConfigurator {
+        calls: RefCell<Vec<ConfigurationCall>>,
+        rejected_step: Option<ConfigurationStep>,
+    }
+
+    impl FakeConfigurator {
+        fn accepting() -> Self {
+            Self {
+                calls: RefCell::new(Vec::new()),
+                rejected_step: None,
+            }
+        }
+
+        fn rejecting(step: ConfigurationStep) -> Self {
+            Self {
+                calls: RefCell::new(Vec::new()),
+                rejected_step: Some(step),
+            }
+        }
+
+        fn rejects(&self, step: ConfigurationStep) -> Result<(), isize> {
+            if self.rejected_step == Some(step) {
+                Err(i32::from(BladeRfError::Nodev) as isize)
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    impl ModuleConfigurator for FakeConfigurator {
+        fn configure_frequency(
+            &self,
+            channel: BladeRFChannel,
+            frequency: u64,
+        ) -> Result<(), isize> {
+            self.calls
+                .borrow_mut()
+                .push(ConfigurationCall::Frequency(channel, frequency));
+            self.rejects(ConfigurationStep::Frequency)
+        }
+
+        fn configure_sample_rate(&self, module: bladerf_module, rate: u32) -> Result<u32, isize> {
+            self.calls
+                .borrow_mut()
+                .push(ConfigurationCall::SampleRate(module, rate));
+            self.rejects(ConfigurationStep::SampleRate)
+                .map(|()| ACTUAL_SAMPLE_RATE)
+        }
+
+        fn configure_bandwidth(
+            &self,
+            module: bladerf_module,
+            bandwidth: u32,
+        ) -> Result<u32, isize> {
+            self.calls
+                .borrow_mut()
+                .push(ConfigurationCall::Bandwidth(module, bandwidth));
+            self.rejects(ConfigurationStep::Bandwidth)
+                .map(|()| ACTUAL_BANDWIDTH)
+        }
+
+        fn configure_gain(&self, module: bladerf_module, gain: i32) -> Result<(), isize> {
+            self.calls
+                .borrow_mut()
+                .push(ConfigurationCall::Gain(module, gain));
+            self.rejects(ConfigurationStep::Gain)
+        }
+    }
+
+    fn module_config() -> BladeRFModuleConfig {
+        BladeRFModuleConfig {
+            frequency: 915_000_000,
+            sample_rate: REQUESTED_SAMPLE_RATE,
+            bandwidth: REQUESTED_BANDWIDTH,
+            lna_gain: 42,
+            vga1: 0,
+            vga2: 0,
+        }
+    }
+
+    fn expected_calls() -> [ConfigurationCall; 4] {
+        let module = BladeRFChannel::Rx1 as bladerf_module;
+        [
+            ConfigurationCall::Frequency(BladeRFChannel::Rx1, 915_000_000),
+            ConfigurationCall::SampleRate(module, REQUESTED_SAMPLE_RATE),
+            ConfigurationCall::Bandwidth(module, REQUESTED_BANDWIDTH),
+            ConfigurationCall::Gain(module, 42),
+        ]
+    }
+
+    #[test]
+    fn configure_module_applies_settings_in_order_and_returns_actual_values() {
+        let device = FakeConfigurator::accepting();
+
+        let applied = configure_module(&device, BladeRFChannel::Rx1, module_config()).unwrap();
+
+        assert_eq!(
+            applied,
+            BladeRFAppliedModuleConfig {
+                sample_rate: ACTUAL_SAMPLE_RATE,
+                bandwidth: ACTUAL_BANDWIDTH,
+            }
+        );
+        assert_eq!(*device.calls.borrow(), expected_calls());
+    }
+
+    #[test]
+    fn configure_module_reports_each_rejected_step_and_stops() {
+        let cases = [
+            (
+                ConfigurationStep::Frequency,
+                BladeRFModuleConfigError::Frequency(BladeRfError::Nodev),
+            ),
+            (
+                ConfigurationStep::SampleRate,
+                BladeRFModuleConfigError::SampleRate(BladeRfError::Nodev),
+            ),
+            (
+                ConfigurationStep::Bandwidth,
+                BladeRFModuleConfigError::Bandwidth(BladeRfError::Nodev),
+            ),
+            (
+                ConfigurationStep::Gain,
+                BladeRFModuleConfigError::Gain(BladeRfError::Nodev),
+            ),
+        ];
+
+        for (index, (step, expected_error)) in cases.into_iter().enumerate() {
+            let device = FakeConfigurator::rejecting(step);
+
+            let error =
+                configure_module(&device, BladeRFChannel::Rx1, module_config()).unwrap_err();
+
+            assert_eq!(error, expected_error);
+            assert_eq!(&*device.calls.borrow(), &expected_calls()[..=index]);
+        }
+    }
 
     #[test]
     fn test_list_devices() -> Result<(), isize> {
